@@ -1,0 +1,13 @@
+name: OttBikeCounters
+title: OttBikeCounters
+username:
+account: jmoggridge
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2444039
+bundleId: 3259176
+url: https://jmoggridge.shinyapps.io/OttBikeCounters/
+when: 1591916663.78061
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: ottbikes.parse.nb.html|ottbikes.parse.Rmd|plots.nb.html|plots.R|plots.Rmd|README.md|Rplot001.png|weather.parse.R|data/bike.weather.long.RDS|data/ottbike_counters.ts.csv|figures
