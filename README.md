@@ -1,5 +1,5 @@
 # ottbike_counters
-Ottawa Bike counters: historical data and forecasting with R
+Ottawa Bike counters: time series analysis and forecasting with R
 
 Shiny app featuring:
 -  time series plots
