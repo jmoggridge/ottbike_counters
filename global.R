@@ -2,6 +2,7 @@
 bikes <- readRDS("./data/ottbike_counters.ts.RDS") %>%
   filter(Date >= "2010-01-28",
          Date <= "2019-09-30")
+
 geo <- read.csv("./data/locations.csv")
 
 locations <- c("Adawé", "Alexandra", "Canal Ritz", "Colonel By",
@@ -55,7 +56,6 @@ pcs <- readRDS("./data/bikes_pca.RDS")
 
 ###########################   Themes  #################################
 
-
 col_discrete <- scale_colour_carto_d(name = "", type = 'qualitative', direction = 1)
 fill_discrete <- scale_fill_carto_d(name = "", type = 'qualitative', direction = 1)
 basic_theme <- theme_void() + theme_tufte(base_size = 16,
@@ -77,9 +77,6 @@ thresholdv <- geom_vline(xintercept=c(100, 200), linetype="longdash", color = "b
 # for timeseries first of months' lines
 first_of_month <- geom_vline(xintercept = c(182, 213, 242), color = "darkgrey", alpha = 0.3, size = 2.5)
 annot <- data.frame(x=c(170,200,230), y=seq(1015,1015,3), label = c('June', 'July', 'Aug'))
-
-
-
 
 ## Social media, by-line,
 jm.link <- tags$a(href="https://jmoggridge.github.io/", "J.Moggridge")

@@ -1,4 +1,4 @@
-### Ottawa bike counters dashboard
+################## Ottawa bike counters dashboard #########################################
 
 #### libraries ####
 library(tidyverse)
@@ -25,13 +25,11 @@ library(ggfortify)
 library(rcartocolor)
 library(RColorBrewer)
 require(graphics)
-library(gplots)
 library(extrafont)
 library(chron)
 library(zoo)
 library(broom)
 library(ggtext)
-library(kableExtra)
 library(ggrepel)
 
 # library(shinyWidgets)
@@ -172,19 +170,18 @@ ui <- fluidPage(theme = shinytheme("lumen"), #paper is good too, flatly, journal
 )
 
 ###########################   SERVER    ######################################################
-
 # Define server logic required to draw a histogram
 server <- function(input, output) {
 
 
     #############################      Leaflet Map     #######################################
+
     output$leaflet.map <- renderLeaflet({
         leaflet() %>%
             addProviderTiles(providers$Stamen.TonerLite,
                              options = providerTileOptions(noWrap = TRUE)) %>%
             addMarkers(data = geo[, c(2,3)],label =  geo$locations)
     })
-
     #############################        Inputs        #######################################
 
     multipleInput <- reactive({
@@ -210,7 +207,6 @@ server <- function(input, output) {
                    Date >= input$date.range[1],
                    Date <= input$date.range[2]) %>%
             as_tibble() %>%
-
             mutate(location = as.factor(location)) %>%
             pivot_wider(id_cols = "Date",
                         names_from = "location",
@@ -219,6 +215,7 @@ server <- function(input, output) {
             mutate_if(is.character, as.numeric)
         return(matrix)
     })
+
 
     #   ############################        PLOTS        #######################################
 
@@ -625,8 +622,6 @@ server <- function(input, output) {
             geom_text_repel(aes(label=location), size = 6) +
             labs(x="PC1", y="PC2") + basic_theme + geom_rangeframe(colour='black')
     })
-
-        # session$onSessioÇnEnded(stopApp)
 }
 ################################### APP CALL ##################################################
 # Run the application
