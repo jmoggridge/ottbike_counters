@@ -1,0 +1,306 @@
+---
+title: "OttBike Counters: Exploratory analysis"
+output: html_notebook
+---
+
+
+```{r libs, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(knitr)
+library(httr)
+library(lubridate)
+library(forecast)
+library(feasts)
+library(tsibble)
+library(kableExtra)
+
+# for excel files: having a bunch of issues (esp. dates)
+library(readxl)
+library(openxlsx) 
+# library(xlsx) # dates aren't working well or something? cant remember
+```
+
+
+
+```{r}
+bikes.ts <- readRDS("../data/ottbike_counters.ts.RDS") %>%
+  mutate(location = as.factor(location))
+
+levels(bikes.ts$location)
+```
+
+
+```{r}
+ggplot(bikes.ts, aes(x=Date, y=location, color=log(count+1))) + geom_tile() +
+  scale_colour_viridis_c() + theme_light()
+```
+
+
+
+
+
+```{r message=FALSE, warning=FALSE}
+locations <- c("Adawé", "Alexandria", "Canal Ritz", "Colonel By","Laurier/Bay",  "Laurier/Lyon", "Laurier/Metcalfe", "OTrain/Bayview", "OTrain/Gladstone", "OTrain/Young", "Ottawa river", "Portage", "Somerset")
+
+for (loc in locations){
+  
+  ts <- bikes.ts %>%
+    filter(location == loc)
+  
+  title <- paste("Timeseries: ", as.character(loc))
+  p1 <- ts %>%
+    autoplot(alpha = 0.5) +
+    ylab("Daily count") + xlab("Date") +
+    ggtitle(title)
+  
+  title <- paste("Seasonal trend: ", as.character(loc))
+  p2 <- ts %>% fill_gaps() %>%
+    gg_season(alpha = 0.5, period = 'year') +
+    ylab("Daily count") + xlab("Date") + 
+    ggtitle(title)
+  
+
+  title <- paste("Weekly trend: ", as.character(loc))
+  p3 <- ts %>% fill_gaps() %>%
+    gg_season(alpha = 0.5, period = 'week') +
+    ylab("Daily count") + xlab("Date") + 
+    ggtitle(title) +
+    theme(axis.text.x = element_text(angle = 25, vjust = 0.8),
+        axis.title.x = element_blank())
+
+  show(p1)
+  show(p2)
+  show(p3)
+}
+rm(list = c(p1,p2,p3,ts))
+```
+
+
+
+
+```{r}
+ts <- bikes.ts %>%
+  filter(location == "Colonel By") %>%
+  select(c(1,3)) %>%
+  as_tsibble(index='Date')
+
+ggseasonplot(x=ts, polar = TRUE)
+```
+
+
+```{r}
+bikes.ts %>% 
+  fill_gaps() %>% 
+  filter(location %in% c("Adawé", "Alexandria", "Canal Ritz",
+                         "Colonel By", "Laurier/Metcalfe","OTrain/Bayview",
+                         "OTrain/Gladstone", "Ottawa River")) %>%
+  gg_season(alpha = 0.5) +
+  ylab("Daily count") + xlab("Date") + ggtitle("All bike counters, all years")
+```
+
+```{r}
+p1 <- bikes.ts %>% 
+  fill_gaps() %>% 
+  filter(location %in% c("Ottawa river", "Laurier/Metcalfe", 
+                         "Alexandria")) %>%
+  autoplot() + facet_grid(location~.) +
+  ylab("Daily count") + xlab("Date") + ggtitle("OttBike Counters: overall trend")
+
+seasonal1 <- bikes.ts %>% 
+  fill_gaps() %>% 
+  filter(location %in% c("Ottawa river", "Laurier/Metcalfe", 
+                         "Alexandria")) %>%
+  gg_season(alpha = 0.5, period = 'year') +
+  ylab("Daily count") + xlab("Date") + ggtitle("OttBike Counters: seasonal trend")
+
+weekly1 <- bikes.ts %>% 
+  fill_gaps() %>% 
+  filter(location %in% c("Ottawa river", "Laurier/Metcalfe", 
+                         "Alexandria")) %>%
+  gg_season(alpha = 0.5, period = 'week') +
+  ylab("Daily count") + 
+  ggtitle("OttBike Counters: weekly trend") +
+  theme(axis.text.x = element_text(angle = 25, vjust = 0.8),
+        axis.title.x = element_blank())
+p1
+seasonal1
+weekly1
+```
+
+
+```{r}
+
+seasonal2 <- as_tibble(bikes.ts) %>% 
+  filter(location %in% c("Ottawa river", "Laurier/Metcalfe", 
+                         "Alexandria")) %>%
+  mutate(week = floor_date(Date, unit = 'week')) %>%
+  group_by(week, location) %>%
+  summarise(sum = sum(count)) %>%
+  as_tsibble(index='week', key='location') %>%   fill_gaps() %>% 
+
+  gg_season(alpha = 0.5, period = 'year') +
+  facet_grid(location~.) +
+  ylab("Daily count") + xlab("Date") + ggtitle("OttBike Counters: seasonal trend")
+seasonal2
+```
+
+
+```{r}
+laurier <- c("Laurier/Bay", "Laurier/Lyon", "Laurier/Metcalfe")
+
+# Daily riders
+daily <- bikes.ts %>% 
+  filter(location == "Laurier/Metcalfe") %>% 
+  filter(Date > ymd("2012-01-01")) %>%
+  autoplot(.vars = count, alpha = 0.82) +
+  ylab("Daily rides") + xlab("Date") +
+  ggtitle(paste("#Ottbike counters: ", "Laurier/Metcalfe"))
+daily
+```
+
+
+```{r}
+laur.week <- as_tibble(bikes.ts) %>%
+  filter(location == "Laurier/Metcalfe") %>%
+  filter(Date > ymd("2012-01-01")) %>%
+  mutate(week = floor_date(Date, unit = 'week')) %>%
+  group_by(week) %>%
+  summarise(sum = sum(count)) %>%
+  as_tsibble(index='week')
+
+laur.week %>%
+  autoplot(sum, alpha = 0.82) +
+  ylab("Weekly rides") + xlab("Date") +
+  ggtitle(paste("#Ottbike counters: ", "Laurier/Metcalfe"))
+laur.week %>%
+  gg_season(y=sum, alpha = 0.83, size = 0.5) +
+  ylab("Weekly rides") + xlab("Date") + 
+  ggtitle("#Ottbike counters: Laurier bike lane")
+```
+
+
+
+```{r}
+laur.month <- as_tibble(bikes.ts) %>%
+  filter(location %in% laurier) %>% 
+  filter(Date > ymd("2012-01-01")) %>%
+  mutate(month = floor_date(Date, unit = 'month')) %>%
+  group_by(month, location) %>%
+  summarise(sum = sum(count)) %>%
+  as_tsibble(index='month', key = 'location')
+
+laur.month %>%
+  autoplot(.vars = sum, alpha = 0.82) +
+  ylab("Monthly rides") + xlab("Date") +
+  facet_grid(.~location) +
+  ggtitle(paste("#Ottbike counters: ", "Laurier/Metcalfe"))
+
+
+```
+
+
+
+```{r}
+bikes.ts %>% 
+  filter(location %in% laurier) %>% fill_gaps() %>%
+  autoplot(.vars = count, alpha = 0.82) +
+  facet_grid(.~location) +
+  ylab("Daily rides") + xlab("Date") +
+  ggtitle("#Ottbike counters: Laurier bike lane")
+
+bikes.ts %>% 
+  filter(location %in% laurier) %>% fill_gaps() %>%
+  gg_season(y=count, alpha = 0.83, size = 0.5) +
+  ylab("Daily rides") + xlab("Date") + 
+  ggtitle("#Ottbike counters: Laurier bike lane")
+```
+
+
+```{r}
+Otrain <- c("OTrain/Bayview", "OTrain/Gladstone", "OTrain/Young")
+
+bikes.ts %>% 
+  filter(location %in% Otrain) %>% fill_gaps() %>%
+  autoplot(.vars = count, alpha = 0.82) +
+  geom_smooth(colour = 'black') +
+  facet_grid(.~location) +
+  ylab("Daily rides") + xlab("Date") +
+  ggtitle("#Ottbike counters: O-train MUP")
+
+bikes.ts %>% 
+  filter(location %in% Otrain) %>% fill_gaps() %>%
+  gg_season(alpha = 0.8, size = 0.5) +
+  # geom_smooth() +
+  ylab("Daily rides") + xlab("Date") + 
+  ggtitle("#Ottbike counters: O-Train MUP")
+```
+
+
+
+
+
+
+```{r}
+
+bikes.week <- bikes.ts %>%
+  group_by(week(Date)) %>%
+  summarize(mean = mean())
+```
+
+
+```{r}
+bikes.ts <-  fill_gaps(bikes.ts)
+bikes.ts %>% 
+  autoplot(alpha=0.5) +
+  ylab("Daily count") + xlab("Date") + ggtitle("Colonel By")
+```
+
+
+```{r}
+laurier <- c("Laurier/Bay", "Laurier/Lyon", "Laurier/Metcalfe")
+bikes.ts %>% 
+  filter(location %in% laurier) %>% fill_gaps() %>%
+  gg_season(alpha = 0.5) +
+  ylab("Daily count") + xlab("Date") + ggtitle("Laurier at Bay, Lyon, and Metcalfe")
+```
+
+
+```{r}
+alex <- bikes.ts[, c('Date','ALEX')]
+ggsubseriesplot(alex) #+
+  # ylab("Daily count") + xlab("Month") + ggtitle("Colonel By")
+
+```
+
+
+
+
+
+```{r}
+bikes.ts %>% autoplot(ORPY) +
+  ylab("Daily riders") + xlab("Date") + ggtitle("Ottawa River MUP")
+
+bikes.ts %>% fill_gaps() %>% gg_season(ORPY, alpha = 0.5) +
+  ylab("Daily riders") + xlab("Date") + ggtitle("Ottawa River MUP")
+
+
+```
+
+
+
+
+
+
+
+
+```{r}
+bikes.ts %>% autoplot(ALEX, alpha = 0.9, size =0.4) +
+  ylab("Daily riders") + xlab("Date") + ggtitle("Alexandria bikelane")
+
+bikes.ts %>% fill_gaps() %>% gg_season(ALEX, alpha = 0.5) +
+  ylab("Daily riders") + xlab("Date") + ggtitle("Alexandria bikelane")
+
+
+```
+
+

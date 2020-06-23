@@ -1,0 +1,174 @@
+---
+title: "Ottbikes forecasting notebook"
+output: html_notebook
+---
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(lubridate)
+library(tsibble)
+library(feasts)
+library(forecast)
+library(GGally)
+library(zoo)
+library(ggfortify)
+```
+
+
+```{r}
+bikes.ts <- readRDS("../data/ottbike_counters.ts.RDS") %>%
+  mutate(location = as.factor(location))
+levels(bikes.ts$location)
+
+locations <- c("Adawé", "Alexandra", "Canal Ritz", "Colonel By","Laurier/Bay",  "Laurier/Lyon", "Laurier/Metcalfe", "OTrain/Bayview", "OTrain/Gladstone", "OTrain/Young", "Ottawa River", "Portage", "Somerset")
+```
+
+
+
+### Imputing missing values?
+
+-fill gaps just adds NA to gaps within the min-max dates
+
+```{r}
+bikes.ts %>% 
+  filter(!is.na(count)) %>%
+  as_tsibble(index = Date, key = location) %>% 
+  ggplot(aes(x=Date, y=location, color=log(count+1))) + geom_tile() +
+  scale_colour_viridis_c() + theme_light()
+
+bikes.ts %>% 
+  filter(!is.na(count)) %>% 
+  as_tsibble(index = Date, key = location) %>% fill_gaps() %>%
+  filter(as.character(location) %in% locations[c(2,3,4,11)]) %>%
+  # mutate(count = na.approx(count)) %>%
+  ggplot(aes(x=Date, y=location, color=log(count+1))) + geom_tile() +
+  scale_colour_viridis_c() + theme_light()
+```
+
+- the naive na.approx() method does poorly considering the strong seasonal trends that should be fairly predictable? Imputation could produce a more acceptable simulated version.
+
+```{r}
+bikes.ts %>% 
+  filter(!is.na(count)) %>% 
+  as_tsibble(index = Date, key = location) %>% fill_gaps() %>%
+  filter(as.character(location) %in% locations[c(2,3,4,11)]) %>%
+  mutate(count = zoo::na.approx(count)) %>%
+  ggplot(aes(x=Date, y=location, color=count)) + geom_tile() +
+  scale_colour_viridis_c() + theme_light()
+```
+
+
+
+### The missing values are really messing up the overall trend
+
+```{r}
+stl.comps <- bikes.ts %>% 
+  filter(!is.na(count)) %>% as_tsibble(index = Date, key = location) %>%
+  fill_gaps() %>%
+  filter(as.character(location) %in% locations[c(2)]) %>%
+  mutate(count = na.approx(count)) %>%
+  model(STL(count ~ season(window=13),  robust = TRUE)) %>%
+  components()
+
+stl.comps %>%
+  autoplot(alpha=0.5, colour = 'red') + theme(legend.position = 'bottom')
+
+
+
+stl.comps2 <- bikes.ts %>% 
+  filter(!is.na(count)) %>% 
+  as_tsibble(index = Date, key = location) %>%
+  filter(Date >= ymd("2011-01-01") & Date < ymd("2018-01-01")) %>%
+  fill_gaps() %>%
+  filter(as.character(location) %in% locations[c(2)]) %>%
+  mutate(count = na.approx(count)) %>%
+  model(STL(count ~ season(window=13),  robust = TRUE)) %>%
+  components()
+
+stl.comps2 %>%
+  autoplot(alpha=0.5, colour = 'blue') + theme(legend.position = 'bottom')
+```
+
+
+
+```{r}
+library(patchwork)
+
+stl.comps2 <- stl.comps2 %>%
+  mutate(location = "filtered")
+stl.comps3 <- stl.comps %>%
+  bind_rows(stl.comps2) %>%
+  mutate(location = as.factor(location))
+
+p1 <- stl.comps3  %>%
+  autoplot(count, alpha=0.5, facets = TRUE) + 
+  theme(legend.position = 'none', axis.title.x = element_blank(),
+        axis.text.x = element_blank(), axis.title.y = element_text(angle=0))
+p2 <- stl.comps3  %>%
+  autoplot(trend, alpha=0.5, facets = TRUE) + 
+  theme(legend.position = 'none', axis.title.x = element_blank(),
+        axis.text.x = element_blank(), axis.title.y = element_text(angle=0))
+
+p3 <- stl.comps3  %>%
+  autoplot(season_year, alpha=0.5, facets = TRUE) + 
+  theme(legend.position = 'none', axis.title.x = element_blank(),
+        axis.text.x = element_blank(), axis.title.y = element_text(angle=0))
+
+p4 <- stl.comps3  %>%
+  autoplot(season_week, alpha=0.5, facets = TRUE) + 
+  theme(legend.position = 'none', axis.title.x = element_blank(),
+        axis.text.x = element_blank(), axis.title.y = element_text(angle=0))  
+
+p5 <- stl.comps3  %>%
+  autoplot(remainder, alpha=0.5, facets = TRUE) + 
+  theme(legend.position = 'none', axis.title.x = element_blank(),
+        axis.text.x = element_blank(), axis.title.y = element_text(angle=0))
+
+p6 <- stl.comps3  %>%
+  autoplot(season_adjust, alpha=0.5, facets = TRUE) + 
+  theme(legend.position = 'none', axis.title.x = element_blank(),
+        axis.text.x = element_blank(), axis.title.y = element_text(angle=0))
+```
+
+
+```{r}
+p1/p2/p3/p4/p5/p6 & theme_light() + theme(legend.position = 'none', axis.title.x = element_blank(),
+        axis.text.x = element_blank(), axis.title.y = element_text(angle=0))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Features list from *feasts* package:
+
+
+```{r}
+bikes_features <- bikes.ts %>%
+  features(count, feature_set(pkgs="feasts"))
+bikes_features
+```
+
+- missing some coefficients
+- need a way to present stats data in charts
+
+
+```{r}
+# bikes_features %>%
+#   select_at(vars(contains("season"), location)) %>%
+#   mutate(
+#     seasonal_peak_week = glue::glue("Q{seasonal_peak_week+1}"),
+#     seasonal_trough_week = glue::glue("Q{seasonal_trough_week+1}"),
+#   ) %>%
+#   GGally::ggpairs(mapping = aes(colour=location))
+```
+
