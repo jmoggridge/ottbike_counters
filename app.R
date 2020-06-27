@@ -1,7 +1,7 @@
 ################## Ottawa bike counters dashboard #########################################
 
 #### libraries ####
-library(tidyverse)
+# library(tidyverse)
 library(shiny)
 library(dplyr)
 library(ggplot2)
@@ -11,9 +11,12 @@ library(shinythemes) # bootstrap themes
 library(tidyr)      # pivot_wider.. what else?
 library(ggthemes) # tufte themes
 library(leaflet)  # sidebar map
+
 library(forecast) # forecast statistics
 library(feasts)   # fir time series plots
 library(tsibble)  # for time series objects
+library(imputeTS) # has kalman filter algo and others for filling missing values
+
 library(ggcorrplot)  ## for ?
 library(patchwork)
 library(viridis)
@@ -22,7 +25,7 @@ library(kableExtra)
 library(corrplot)
 library(Hmisc)
 library(ggfortify)
-library(rcartocolor)
+# library(rcartocolor)
 library(RColorBrewer)
 require(graphics)
 library(extrafont)
@@ -45,22 +48,27 @@ source("./global.R")
 # makes all the horizontal lines actually show up
 hr <-  tags$head(tags$style(HTML("hr {border-top: 1px solid #000000;}")))
 
-################# Reactive Shiny doodads ######################
+################# Reactive Shiny data filters ######################
 ### Side panel
-dropdown.location <-
+drop.location <-
     selectInput("drop.location",
-                tags$b("Single location selection:"),
+                tags$b("Single selection:"),
                 locations, selected = "Laurier/Metcalfe")
 
 check.location <- checkboxGroupInput(
-    "check.location", tags$b("Group selection:"), locations, selected = locations[-c(1,5,6,10,12)]
+    "check.location", tags$b("Group selection:"), locations, selected = locations[c(2,4,7,8,11)]
     # inline = FALSE
 )
-date.range <-   dateRangeInput("date.range", p(tags$b("Date range:"), "min 2010-01-28 | max 2019-09-30"),
-                               start  = "2010-01-28",   end = "2019-09-30",
-                               min    = "2010-01-28",   max = "2019-09-30",
-                               format = "yyyy/mm/dd",   separator = " - ",
-                               startview = "decade")
+
+date.slider <- sliderInput("date.slider", p(tags$b("Date range:"), "min 2010-01-28 | max 2019-09-30"),
+                           min = as.Date("2010-01-28","%Y-%m-%d"),
+                           max = as.Date("2019-09-30","%Y-%m-%d"),
+                           value=c(as.Date("2010-01-28"), as.Date("2019-09-30")),
+                           timeFormat="%Y-%m-%d")
+
+drop.colours <- selectInput("drop.colours", tags$b("Plot colours:"),
+                                c("viridis","magma","cividis","inferno"),
+                                selected = "D")
 
 ### Main panels
 
@@ -72,13 +80,10 @@ drop.combo <-
 slider.kdays <- sliderInput("k.max", tags$b("Set lagging days range"),
                             min = 14, max = 366, step = 1,ticks = TRUE,value = 35
                                 )
-# dropdown.clust <-
-#     selectInput("drop.clust", tags$b("Metric:"), locations, selected = "Average-linkage")
-###
 
-########    # UI TABPANELS    ########
+##########################    # UI TABPANELS    #####################################################
 
-#### TIME SERIES ###
+#### TIME SERIES ####
 tab.ts <- tabPanel(tags$b("Time series"),
                    br(), plotOutput("daily.ts", height = '500px', width = "100%"),
                    p("*This figure reacts to the chosen 'group selection' and 'date range'."), hr()
@@ -87,6 +92,8 @@ tab.season <- tabPanel(tags$b("Seasonality"),
                        br(), plotOutput("period.ts", height = '500px', width = '80%'),
                        cap.season, hr()
 )
+
+
 #### SCATTER / CLUSTER ####
 tab.scat <- tabPanel(tags$b("Pairwise scatter"),
                      plotOutput("scatter", height = '500px', width = '100%'),
@@ -110,7 +117,7 @@ tab.ACF <- tabPanel(tags$b("Autocorrelation"), br(),
                     plotOutput("ACF", height = '500px', width = '100%'),
                     slider.kdays,
                     cap.ACF, hr(),
-                    DT::dataTableOutput("table.acf")
+                    # DT::dataTableOutput("table.acf")
 )
 
 tab.STL <- tabPanel(tags$b("Decomposition"), br(),
@@ -143,31 +150,37 @@ whitespace <- HTML('&nbsp;&nbsp;&nbsp;&nbsp;')
 bike.icon <- HTML('<i class="fa fa-bicycle fa-1x" aria-hidden="false"></i>')
 
 
-###########################     UI LAYOUT     ######################################################
 
-ui <- fluidPage(theme = shinytheme("lumen"), #paper is good too, flatly, journal
-                sidebarLayout(
-                    # Sidebar
-                    sidebarPanel(hr, bike.icon, "24,080,530 and counting...", bike.icon,
-                                 titlePanel(title = tags$b(title.text), windowTitle = "#OttBikeCounters"),
-                                 hr(),
-                                 h4(em("time series analysis dashboard"),br()), br(),
-                                 fluidRow(column(11, date.range, dropdown.location, check.location,
-                                                 h5("*Input selectors are noted at the end of the caption for each for each figure."),
-                                                 hr(),
-                                                 side.text)),
+###########################     UI LAYOUT    ########################################################
 
-                    ),
+ui <-
+    fluidPage(theme = shinytheme("lumen"), #paper is good too, flatly, journal
+              sidebarLayout(
+                  # Sidebar
+                  sidebarPanel(hr, bike.icon, "24,080,530 and counting...", bike.icon,
+                               titlePanel(title = tags$b(title.text), windowTitle = "#OttBikeCounters"),
+                               hr(),
+                               h4(em("time series analysis dashboard"),br()), br(),
+                               fluidRow(column(11, date.slider),
+                                        column(5, check.location),
+                                        column(6, drop.location, drop.colours),
+                                        column(11,
+                                               h5("*Input selectors are noted at the end of the caption for each for each figure."),
+                                               hr(), side.text)
+                               )
 
-                    # Main
-                    mainPanel(br(), tabsetPanel(type = 'tabs',
-                                          tab.ts, tab.season, tab.weather,
-                                          tab.corr, tab.auto, tab.map
-                                          ),
-                              br(),br()
-                    )
-                )
-)
+                  ),
+
+                  # Main
+                  mainPanel(br(),
+                            tabsetPanel(type = 'tabs',
+                                        tab.ts, tab.season, tab.weather,
+                                        tab.corr, tab.auto, tab.map
+                            ),
+                  br(),br()
+                  )
+              )
+    )
 
 ###########################   SERVER    ######################################################
 # Define server logic required to draw a histogram
@@ -187,8 +200,8 @@ server <- function(input, output) {
     multipleInput <- reactive({
         df = bikes %>%
             filter(location %in% input$check.location,
-                   Date >= input$date.range[1],
-                   Date <= input$date.range[2])
+                   Date >= input$date.slider[1],
+                   Date <= input$date.slider[2])
         return(df)
     })
     singleInput <- reactive({
@@ -197,15 +210,15 @@ server <- function(input, output) {
     weatherInput <- reactive({
         df = bike.weather %>%
             filter(location %in% input$check.location,
-                   Date >= input$date.range[1],
-                   Date <= input$date.range[2])
+                   Date >= input$date.slider[1],
+                   Date <= input$date.slider[2])
         return(df)
     })
     scatInput <- reactive({
         matrix <- bikes %>%
             filter(location %in% input$check.location,
-                   Date >= input$date.range[1],
-                   Date <= input$date.range[2]) %>%
+                   Date >= input$date.slider[1],
+                   Date <= input$date.slider[2]) %>%
             as_tibble() %>%
             mutate(location = as.factor(location)) %>%
             pivot_wider(id_cols = "Date",
@@ -221,7 +234,7 @@ server <- function(input, output) {
 
     output$daily.ts <- renderPlot({
         locs <- length(input$check.location)
-        dt <- input$date.range
+        dt <- input$date.slider
         if (locs < length(locations)){
             sub <- paste("from", locs, "Ottawa locations between", dt[1],'and', dt[2])
         } else {
@@ -233,8 +246,8 @@ server <- function(input, output) {
             mutate(weekend = ifelse(is.weekend(Date), "Weekend", "Weekday"),
                    weekend = fct_rev(weekend)) %>%
             filter(location %in% input$check.location,
-                   Date >= input$date.range[1],
-                   Date <= input$date.range[2])
+                   Date >= input$date.slider[1],
+                   Date <= input$date.slider[2])
 
         ggplot(ts.daily.df, aes(x = Date, y = count, fill=weekend, colour = weekend)) +
             geom_point(alpha = 1, size = 0.42, shape = 1) +
@@ -244,11 +257,11 @@ server <- function(input, output) {
             labs(title = "Daily bike counts time series",
                  subtitle = sub,
                  caption = "Data source: City of Ottawa") +
-            # scale_color_carto_d(palette = "Safe") +
-            # scale_fill_carto_d(palette = "Safe") +
+            scale_color_viridis_d(option = input$drop.colours, direction = -1, end = 0.8,
+                                  begin = 0.2) +
             basic_theme +
             facet_grid(location ~ ., scales = 'free') +
-            guides(colour = guide_legend(override.aes = list(size=5))) +
+            guides(colour = guide_legend(override.aes = list(size=5, pch=15))) +
             theme(plot.margin =margin(0.5, 0, 0, 0, "cm"),
                   legend.position = 'bottom', legend.title = element_blank(),
                   axis.title.y = element_blank(),
@@ -258,9 +271,9 @@ server <- function(input, output) {
 
     output$period.ts <- renderPlot({
         # summarise means
-        period.df <- singleInput() %>%  fill_gaps()%>%  # need tsibble for gg_season
-            filter(Date >= input$date.range[1],
-                   Date <= input$date.range[2])
+        period.df <- singleInput() %>%  fill_gaps() %>%  # need tsibble for gg_season
+            filter(Date >= input$date.slider[1],
+                   Date <= input$date.slider[2])
         monthly <- as_tibble(period.df) %>%
             filter(count > 0) %>%
             mutate(month = month(Date, label = TRUE),
@@ -292,9 +305,9 @@ server <- function(input, output) {
 
         ## plots
         per1 <- period.df %>%
-            gg_season(alpha = 0.25, size = 1, period = "year") +
+            gg_season(alpha = 0.8, size = 0.6, period = "year") +
             ylab("Daily count") +  basic_theme + geom_rangeframe(colour='black') +
-            scale_color_viridis_c() +
+            scale_color_viridis_c(option = input$drop.colours) +
             theme(legend.position = 'none',
                   axis.title.x = element_blank(),
                   axis.text.x = element_text(hjust = 1),
@@ -335,14 +348,14 @@ server <- function(input, output) {
             facet_grid(. ~ wday) + geom_rangeframe(colour = 'black') +
             basic_theme +
             theme(
-                  axis.title.x = element_blank(),
-                  # axis.title.y = element_blank(),
-                  axis.text.x = element_text(angle = 80, size = 9, hjust = 1),
-                  panel.grid.major.x = element_line(colour = "grey", size = 0.2),
-                  plot.margin = margin(0.5, 0, 0.05, 0, "cm"))
+                axis.title.x = element_blank(),
+                # axis.title.y = element_blank(),
+                axis.text.x = element_text(angle = 80, size = 9, hjust = 1),
+                panel.grid.major.x = element_line(colour = "grey", size = 0.2),
+                plot.margin = margin(0.5, 0, 0.05, 0, "cm"))
 
         # reactive subtitle
-        dt <- input$date.range
+        dt <- input$date.slider
         sub <- paste('Annual and hebdomadal patterns and their change from', dt[1], 'to', dt[2])
         # ::patchwork
         # pwork <- (per1 | per2) / per3 / per4 + plot_annotation(labs(x = "Year", y = "Mean daily count"))
@@ -357,7 +370,9 @@ server <- function(input, output) {
 
     })
 
-    ### Four weather tabs
+
+
+    ### Four weather tabs ####
     output$Tmean <- renderPlot({
         weatherInput() %>%
             ggplot(aes(x=Tmean, y=count)) +
@@ -390,7 +405,7 @@ server <- function(input, output) {
             geom_rangeframe(colour='black') + facet_wrap(~location,scales="free") + basic_theme +
 
             #Rename the legend title and text labels.
-            scale_color_viridis_d(name= "Precipitation (mm)",direction = -1, end = 0.8,
+            scale_color_viridis_d(option = input$drop.colours, name= "Precipitation (mm)",direction = -1, end = 0.8,
                                   labels = c("0", "< 5 ", "5 - 20", "20 +")) +
             # guides(fill = guide_legend(reverse = TRUE)) +
             # guides(colour = guide_legend(reverse = TRUE)) +
@@ -410,7 +425,7 @@ server <- function(input, output) {
         weatherInput() %>% ggplot(aes(x = Wind.deg, y = count)) +
             geom_jitter(width = 4, size =0.20, alpha =0.35) +
             # geom_density2d(aes(), geom = "polygon") +
-            # scale_color_viridis_c() +
+            scale_color_viridis_c(option = input$drop.colours) +
             geom_smooth(size = 2, na.rm = TRUE, color="#00BFC4") +
             geom_point(aes(x=0,y=0), size = 0.78, colour='red2')+
             ylim(limit.count) +
@@ -446,15 +461,15 @@ server <- function(input, output) {
         wind1 + facet_wrap(.~location, scales="free_y")
     })
 
-    ### first combo weather tab
+    ### first combo weather tab ####
     output$weather.combo <- renderPlot({
         if (input$drop.combo == 'Selected group'){
             combo.df <- weatherInput()
             locs <- paste(length(input$check.location), "selected locations")
         } else if (input$drop.combo == 'All locations'){
             combo.df <- bike.weather %>%
-                filter(Date >= input$date.range[1],
-                       Date <= input$date.range[2])
+                filter(Date >= input$date.slider[1],
+                       Date <= input$date.slider[2])
             locs <- "all locations"
         }
         else {
@@ -478,7 +493,7 @@ server <- function(input, output) {
             geom_jitter(alpha=0.2, size=0.2) +
             geom_boxplot(alpha=0, colour='black', notch = 2) +
             # xlab("Precipitation (mm)") +
-            scale_color_viridis_d(name= "Precipitation (mm)",direction = -1, end =0.8,
+            scale_color_viridis_d(option = input$drop.colours, name= "Precipitation (mm)",direction = -1, end =0.8,
                                  labels = c("0", "< 5 ", "5 - 20", "20 +")) +
             guides(colour = guide_legend(override.aes = list(size=5, alpha=1))) +
             # guides(fill= guide_legend(override.aes = list(size=1, alpha=1, shape=0))) +            scale_color_discrete(name= "Precip. (mm)",
@@ -509,7 +524,7 @@ server <- function(input, output) {
                   axis.title.y = element_blank(),
                   plot.margin = margin(0, 0, 0, 0, "cm"))
 
-        dt <- input$date.range
+        dt <- input$date.slider
         # ::patchwork.weather
         (Tm + Pr + Wd + Ws) +
 
@@ -520,12 +535,12 @@ server <- function(input, output) {
                 theme = basic_theme)
     })
 
-    ### Scatter xy grid and heatmap/dendrogram
+    ### Scatter xy grid and heatmap/dendrogram ####
     output$scatter <- renderPlot({
         pairs(scatInput(), pch=1, cex=0.1, alpha=0.5, lower.panel = NULL)
     })
 
-    ### heatmap
+    ### heatmap ####
     output$heatmap <- renderPlot({
         bike.matrix <- bikes %>% as_tibble() %>%
             mutate(location = as.factor(location)) %>%
@@ -541,7 +556,7 @@ server <- function(input, output) {
             as.matrix()
 
         colr <- viridis_pal(alpha = 0.9, begin = 0, end = 1, direction = 1,
-                            option = "E")(1000)
+                            option = input$drop.colours)(1000)
         b.matrix <- rcorr(bike.matrix)
         heatmap.2(b.matrix$r, scale="none", # 'none' because matrix is symmetric
                   trace='none', col = colr,
@@ -555,7 +570,7 @@ server <- function(input, output) {
                   margins = c(10, 12)) + basic_theme # use margins to avoid cutting off labels
     })
 
-    ### ACF, PACF and STL plots
+    ### ACF, PACF and STL plots ####
     output$ACF <- renderPlot({
         acf.p1 <- bikes %>% fill_gaps() %>%
             filter(location %in% input$check.location) %>%
@@ -595,24 +610,30 @@ server <- function(input, output) {
         rownames = FALSE,
         options = list(paging = FALSE, autoWidth = TRUE, searching=FALSE))
     )
-    ### STL
+    ### STL ####
     output$plot.STL <- renderPlot({
-        bikes %>%
+
+        # d.range <- c(max(min()))
+        stl.df <- bikes %>%
             filter(location %in% input$drop.location) %>%
             filter(!is.na(count)) %>%
-            # filter(Date > ymd('2015-01-01')) %>%
             as_tsibble() %>% fill_gaps() %>%
-            mutate(count = na.approx(count)) %>%
+            mutate(count = na.interp(count))# %>%
+        lower <- max(c(min(stl.df$Date), input$date.slider[1])) - months(4)
+        upper <- min(c(max(stl.df$Date), input$date.slider[2]))
+        stl.df %>%
             model(STL(count ~ season(window=13), # + season(window='periodic'),
                       robust = TRUE)) %>%
             components() %>%
             autoplot() +
+            xlim(c(lower, upper)) + ###
             labs(title =  paste("STL decomposition of",input$drop.location,
                                 "bike counter time series"),
                 subtitle = 'Count = trend + annual & weekly seasonality + remainder',
                 caption = 'Data source: City of Ottawa', theme = basic_theme) +
             basic_theme +
             theme(strip.text.y.right = element_text(angle = 0))
+
     })
 
     output$PCA <- renderPlot({
@@ -628,3 +649,11 @@ server <- function(input, output) {
 shinyApp(ui = ui, server = server)
 
 
+
+
+
+# date.range <-   dateRangeInput("date.range", p(tags$b("Date range:"), "min 2010-01-28 | max 2019-09-30"),
+#                                start  = "2010-01-28",   end = "2019-09-30",
+#                                min    = "2010-01-28",   max = "2019-09-30",
+#                                format = "yyyy/mm/dd",   separator = " - ",
+#                                startview = "decade")

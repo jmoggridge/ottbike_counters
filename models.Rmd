@@ -7,13 +7,14 @@ output: html_notebook
 
 - This notebook uses the Ottawa river pathway time series; we'll figure out how to model this and then
 apply a common approach to all counters.  
-- Ideally, we would like to find a method that can incorporate all the information we have available instead of using monthly averages, for example.
+- Ideally, we would like to find a method that can incorporate all the information we have available instead of resorting to using monthly averages.
 - We might like to know when or how often the bike lanes/paths might get very busy.
      
    
 #### Goals     
     
-Broadly speaking, we can do three things with an effective model of the time series...   
+We would like to produce a univariate time series model for each bike counter location.    
+Ultimately, we can do three things with an effective time series model...   
 - **smoothing**: fix data in the past that may have been erroneously measured/timed.   
 - **filtering**: is the current data reasonable; is the instrument broken?    
 - **forecasting**: predict traffic levels in the future from available data.   
@@ -22,24 +23,28 @@ Broadly speaking, we can do three things with an effective model of the time ser
 
 #### Bike counters data    
 
-The data has an obvious seasonal trend due to Ottawa's climate; further, the path has been used as a xc-skiing trail in the winter for the past couple years. We aren't interested in the winter anyway, so perhaps we will just set anything after the first major snowfall as zero until early spring when counts appear normal.
+##### *Periodicity*
+The data has an obvious annual periodicity due to Ottawa's climate; further, the ORP path has been used as a xc-skiing trail in the winter for the past couple years. We aren't interested in the winter except for at maintenained locations, so perhaps we will just set anything after the first major snowfall as zero until early spring when counts appear normal (we can do a separate forecast for winter-maintained locations).
 
-The weekly trend is very strong in some counters and less so in others. ORP is not as clear as eg. Laurier/Metcalfe, as to what the seasonality of weekly traffic is, or what contribution this component has to the observed counts.
+The weekly trend is very strong in some counters and much less so in others. ORP is not as clear as eg. Laurier/Metcalfe, where weekday traffic is much greater than the weekends. So it would be important to incorporate the annual and weekly periodicity into our forecast model.
 
-ORP has fairly decent looking data without anything overtly suspicious so we won't remove any of these but might try to explain them later through special-days analysis (holidays, events).
-
-
-####
+##### *Missing data*
+ORP has fairly decent looking data without anything overtly suspicious so we won't remove any of these but might try to explain them later through special-days analysis (holidays, events), if we were attempting to explain/discard outliers. Other counters are missing data due to construction or counter malfunctions; it may be prudent to exclude these from modeling training sets. Most counters have missing data, generally in the winter; perhaps imputation of these could allow us to use other models that don't tolerate missing values.
 
 
+#### Visualizing ORP counter data
+
+We'll focus on the Ottawa river pathway counter (ORP) mostly to build our first model and then once we have a method that seems to fit well, we can apply it to all the counters.
 
 ```{r message=FALSE, warning=FALSE, include=FALSE}
 rm(list=ls())
 library(tidyverse)
 library(lubridate)
+library(chron)
 library(tsibble)
 library(feasts)
 library(forecast)
+library(fabletools)
 library(GGally)
 library(zoo)
 library(ggfortify)
@@ -47,16 +52,21 @@ library(patchwork)
 library(ggrepel)
 ```
 
-##### Load data
+##### Load tidy data
 
 - Data I downloaded earlier and parsed into a time series data format called a *tsibble*
 - Needed to fill any gaps for time series analysis with *forecast* package. (`fill_gaps()` function)
 
 ```{r message=FALSE, warning=FALSE}
-bikes <- readRDS("./data/ottbike_counters.ts.RDS")
+bikes <- readRDS("./data/ottbike_counters.ts.RDS") %>%
+  as_tibble() %>%
+  mutate(weekend = ifelse(chron::is.weekend(Date), "Weekend", "Weekday"),
+         weekend = fct_rev(weekend))
+
+
 ORP <- bikes %>%
   filter(location == 'Ottawa River') %>%
-  select(c(Date, count)) %>%
+  select(c(Date, count, weekend)) %>%
   as_tsibble(index=Date) %>%
   fill_gaps()
 # str(ORP)
@@ -66,81 +76,121 @@ ORP <- bikes %>%
   
   - First step to trying to understand the temporal and seasonal nature of the bike counters time series
 
-```{r}
-### Graphical summary from `gg_tsdisplay(ORP)`
-gg_tsdisplay(ORP) #+ scale_colour_viridis_c()
+```{r message=FALSE, warning=FALSE}
+a <- as.tibble(na.omit(ORP)) %>%
+  ggplot(., aes(x=Date, y=count, colour=weekend)) +
+  geom_point(size=0.5) +
+  theme(legend.title = element_blank(),
+        axis.title.x = element_blank())
+        # legend.position = c(0.07,0.9))
 
+b <- as_tibble(ORP) %>%
+  mutate(month = as.factor(month(Date, label = TRUE)),
+         year = as.factor(format(Date, "%Y"))) %>%
+  group_by(month, year) %>%
+  summarise( sum = sum(count), na.rm = TRUE) %>%
+  ggplot(., aes(x = month, y = sum, color = year, group=year)) +
+    geom_line(size = 0.8, alpha = 0.7) +
+    geom_point(size=0.8, alpha=0.8) +
+    scale_color_viridis_d(option = "D")+
+    theme(legend.position = "none",
+          axis.title.x = element_blank())
+
+orp2 <- as.tibble(ORP) %>%
+  mutate(wday = as.factor(wday(Date, label=TRUE)),
+         month = as.factor(month(Date, label = TRUE)),
+         year = format(Date, "%Y")) %>%
+  group_by(year, wday) %>%
+  summarise(mean = mean(count, na.rm = TRUE),
+            var = var(count, na.rm = TRUE)) %>%
+  ungroup() 
+c <- orp2 %>%  ggplot(., aes(x= wday, y=mean, group = year, colour = year)) +
+    geom_line(size = 0.8, alpha = 0.7) +
+    geom_point(size=0.8, alpha=0.8) +
+    scale_color_viridis_d(option = "D") +
+    theme(legend.position = c(1.11, 1.1), 
+          legend.title = element_blank(),
+          axis.title.x = element_blank())
+
+a/b/c + plot_annotation(title =  "What are the weekly and seasonal patterns at ORP", 
+                       subtitle = "Time series, annual and weekly cycles") &
+            theme(plot.tag = element_text(size = 10))
 ```
+<!-- ```{r} -->
+<!-- ### Graphical summary from `gg_tsdisplay(ORP)` -->
+<!-- gg_tsdisplay(ORP) #+ scale_colour_viridis_c() -->
+<!-- ``` -->
 
-This shows us the time series. We see that it has a strong annual seasonal component. The autoregression shows large, position acf coefficients (season is longer than window). We also note the weekly seasonality in the acf plot's 'scalloped' shape.
-
-    
-We can see that the data set has many low counts around or equal to zero.  
-Winter has nil traffic because the path is an xc ski trail. We're okay with that.    
+This shows us the time series for ORP; we see that it has a strong annual seasonal component with peak in July and trough in Jan/Feb. The weekdays are consistently busier than weekends at this location. We can see that the data set has many low counts around or equal to zero in winter because the path becomes an x-c ski trail. 
     
 
-    
 ##### Create differenced count variable and visualize time series
 
+We can plot the daily change (ie. the derivative of count or 'differenced' time series) to see the day-to-day variance in bike traffic. 
 
     
 ```{r message=FALSE, warning=FALSE}
 ORP <- ORP %>%
   mutate(lag = lag(count,1),
          diff = count-lag)
-a <- ggplot(ORP, aes(x=Date, y= diff)) + geom_line() + ggtitle("ORP differenced time series")
-b <- ggplot(ORP, aes(x= diff)) + geom_histogram(bins = 100) + ggtitle("ORP differenced counts")
-a/b
+a <- ggplot(ORP, aes(x=Date, y= diff)) + 
+  geom_point(size=0.6, alpha=0.8) + 
+  ggtitle("ORP daily change in bike count")
+
+# b <- ggplot(ORP, aes(x= diff)) + geom_histogram(bins = 100) + ggtitle("ORP differenced counts")
+
+b <-ORP %>%
+  mutate(year = format(Date, "%Y")) %>%
+  ggplot(., aes(x = yday(Date), y = diff, group = year, colour = year)) +
+  geom_point(alpha = 0.8, size=0.6) +
+  scale_color_viridis_d(option = "D") +
+    theme(legend.position = c(1.11, 1.1), 
+          legend.title = element_blank(),
+          axis.title.x = element_blank())
+(a/b)
 ```
 
 
-
-    
 So we can see a fairly strong linear relationship between successive counts. This suggests that our model needs to incorporate this autoregression for accurate modeling.
 
 
 
 ##### Autocorrelation
 
-We can take a closer look at the autocorrelation (ACF) of bike counts at ORP by visualizing the autocorrelation coefficients for all trailing lags to find the period length of the seasonality component. We can do partial autocorrelation too, where the effect of intermediate lag days are removed.
-
-
-```{r message=FALSE, warning=FALSE}
-## lag.max parameter doesn't work in this function??
-a <- ACF(ORP, .vars = count, na.action = na.pass, lag.max=365) %>% 
-  autoplot() + ggtitle("ACF counts")
-b <- ACF(ORP, .vars = diff, na.action = na.pass, lag.max=365) %>% 
-  autoplot() + ggtitle("ACF differences")
-c <- PACF(ORP, .vars = count, na.action = na.pass, lag.max=366) %>% 
-  autoplot() + ggtitle("PACF counts")
-d <- PACF(ORP, .vars = diff, na.action = na.pass, lag.max=366) %>% 
-  autoplot() + ggtitle("PACF differences")
-(a + b) / (c + d)
-```
-Even after differencing once, we still have a lot of significant autocorrelations with lags. This means we can extract more information from the seasonality of the times series, beyond just autoregression effects.
-
-What if we differenced again? (2nd derivative of count)
-
+Autocorrelation is correlation between observations in the time series across some lag period *k*, described by coefficient $r_k$ (same as Pearson r). Eg. for a one day lag, this would be the correlation of each count with the previous count (below).
 
 
 ```{r}
-
-a <- ACF(ORP, .vars = count, na.action = na.pass, lag.max=365) %>% 
-  autoplot() 
-b <- PACF(ORP, .vars = count, na.action = na.pass, lag.max=366) %>% 
-  autoplot()
-
-c <- ggplot(ORP, aes(x=lag, y=count, colour = diff)) + 
-  geom_point(alpha=0.99, shape=1)+ geom_smooth(colour='black') + 
-  scale_color_viridis_c(end=0.9) +
-  labs(x = "Lagging count", y="Count",title = "ORP counter - lag plot (one day)") +
-  theme(legend.position = "none")
-
-c+(a/b)
+c <- ggplot(ORP, aes(x=lag, y=count, colour = diff)) +
+  geom_point(alpha=0.99, shape=1)+ geom_smooth(method=lm, colour='red4') +
+  scale_color_viridis_c(end=0.9, "difference") +
+  labs(x = "Last count", y="Count",title = "ORP counter - lag plot (one day)") 
+  # theme(legend.position = "none")
+c
 ```
 
 
-We can see how closely counts on successive days are by plotting count against the previous count in the lag plot. The acf and ppacf are large and positive. There is much seasonality in the ORP time series.
+
+   We can take a closer look at the autocorrelation (ACF) of bike counts at ORP by visualizing the autocorrelation coefficients for all trailing lags to find the period length of the seasonality component. We can do partial autocorrelation too, where the effect of intermediate lag days are removed.  
+
+```{r}
+
+a <- ACF(ORP, .vars = count, na.action = na.pass, lag_max=42) %>% 
+  autoplot() 
+
+aa <- ACF(ORP, .vars = count, na.action = na.pass, lag_max=366) %>% 
+  autoplot() + scale_x_continuous(breaks = c(0,100,200,300))
+  
+b <- PACF(ORP, .vars = count, na.action = na.pass, lag_max=42) %>% 
+  autoplot()
+bb <- PACF(ORP, .vars = count, na.action = na.pass, lag_max=366) %>% 
+  autoplot() + scale_x_continuous(breaks = c(0,100,200,300))
+(a/aa|b/bb)
+```
+
+
+  The ACF and PACF coeffiecients are large and positive for nearby lags in the year and negative for the other half of the year. There is much seasonality in the ORP time series.
+
 
 
 
@@ -150,24 +200,50 @@ We can see how closely counts on successive days are by plotting count against t
 We can run the same analysis to see if 'differencing' the data (ie. taking the derivative of count). We can ascertain whether the time series is made 'stationary' by differencing. 
 
 Ultimately, we want to deconvolute the time series into seasonal + remainder components of the data; to do this, we need to remove any 'trend', which specifically refers to any longer term changes in the context of forecasting.
-     
+
+
+```{r message=FALSE, warning=FALSE}
+## lag.max parameter doesn't work in this function??
+a <- ACF(ORP, .vars = count, na.action = na.pass, lag.max=365) %>% 
+  autoplot() + ggtitle("ACF: counts")
+b <- ACF(ORP, .vars = diff, na.action = na.pass, lag.max=365) %>% 
+  autoplot() + ggtitle("ACF: diffs")
+c <- PACF(ORP, .vars = count, na.action = na.pass, lag.max=366) %>% 
+  autoplot() + ggtitle("PACF: counts")
+d <- PACF(ORP, .vars = diff, na.action = na.pass, lag.max=366) %>% 
+  autoplot() + ggtitle("PACF: diffs")
+(a + b) / (c + d)
+```
+
+Even after differencing the counts once, we still have a lot of significant autocorrelations with lags. This means we can extract more information from the seasonality of the times series, beyond just autoregression effects (seasonality effects). 
+
+What if we differenced again? (2nd derivative of count)
+
 
 ```{r}
-a <- ACF(ORP, .vars = diff, na.action = na.pass, lag.max=365) %>% 
-  autoplot() + ggtitle("ACF differences")
+a <- ACF(ORP, .vars = diff, na.action = na.pass, lag_max=365) %>% 
+  autoplot() + ggtitle("ACF diff") + scale_x_continuous(breaks=c(0,100,200,300))
 
-b <- PACF(ORP, .vars = diff, na.action = na.pass, lag.max=366) %>% 
-  autoplot() + ggtitle("PACF differences")
-a/b
+aa <- ACF(ORP, .vars = diff - lag(diff,1), na.action = na.pass, lag_max=365) %>% 
+  autoplot() + ggtitle("ACF diff2") + scale_x_continuous(breaks=c(0,100,200,300))
+
+b <- PACF(ORP, .vars = diff, na.action = na.pass, lag_max=366) %>% 
+  autoplot() + ggtitle("PACF diff")+ scale_x_continuous(breaks=c(0,100,200,300))
+
+bb <- PACF(ORP, .vars = diff - lag(diff,1), na.action = na.pass, lag_max=366) %>% 
+  autoplot() + ggtitle("PACF diff2")+ scale_x_continuous(breaks=c(0,100,200,300))
+
+
+a/aa|b/bb
 ```
 
 
 
-##### Extracting features 
+##### Extracting features from ACF and PACF
 
 ACF features
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 
 bikes <- readRDS("./data/ottbike_counters.ts.RDS")
 f.acf <- bikes %>% fill_gaps() %>%
@@ -187,7 +263,6 @@ ggplot(f.acf, aes(y = diff1_acf1, x = acf1, colour = diff2_acf1)) +
        x = "undifferenced", y = "1st order diff", color = "2nd order diff") + 
   scale_color_viridis_c(option="A", end=0.85, begin=0.1)
 
-
 ggplot(f.acf, aes(y = diff1_acf10, x = acf10, colour = diff2_acf10)) +
   geom_point() + geom_text_repel(aes(label=location)) +
   labs(title = "Sum of squares of first ten autocorrelation coefficients (acf10)",
@@ -203,7 +278,7 @@ From STL features, we can plot seasonal over trend strengths to see which series
 For formulas: [https://otexts.com/fpp3/stlfeatures.html](https://otexts.com/fpp3/stlfeatures.html)
 
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 library(ggrepel)
 f.stl <- bikes %>%
   features(count, feat_stl)
@@ -252,6 +327,8 @@ We can also get the acf1 and acf10 for the remainder component of the time serie
 
 ```{r}
 library(broom)
+library(ggrepel)
+
 bikes_features <- bikes %>%
   filter(location != 'Portage') %>%
   features(count, feature_set(pkgs='feasts'))
@@ -278,16 +355,6 @@ saveRDS(pcs, "./data/bikes_pca.RDS")
 ```
 
 
-
-
-```{r}
-# shannon <- bikes %>%
-  # features(count, feat_spectral)
-
-feat_spectral(orp)
-```
-
-
 ### Decomposition
 
 Comparing STL decomposition with default parameters with and without 'robust' setting for handling outliers
@@ -295,10 +362,10 @@ Comparing STL decomposition with default parameters with and without 'robust' se
 ```{r}
 ### 
 
-orp <- ORP %>%
+orp <- ORP[, c(1,2)] %>%
   filter(!is.na(count)) %>%
   fill_gaps() %>%
-  mutate(count = na.approx(count)) %>% as_tsibble()
+  mutate(count = na.interp(count, lambda = 'auto')) %>% as_tsibble()
 orp %>% model(STL(count ~ season(window=13), robust=TRUE)) %>%
   components() %>% autoplot()
 orp %>% model(STL(count ~ season(window=13), robust=FALSE)) %>%
@@ -306,84 +373,182 @@ orp %>% model(STL(count ~ season(window=13), robust=FALSE)) %>%
 
 ```
 
+The STL algorithm decomposed our sequence automatically to a weekly and annual seasonal model: count ~ trend + year + week + remainder.
+
+The robust settings create a smoother trend component and reduce the remainder component.
 
 
+### interpolation / imputation
+
+There are some periods with missing values within the time series (below) that we should interpolate such that modeling will perform better and more methods will be available. 
+
+```{r}
+library(imputeTS)
+plotNA.distribution(ORP$count, cexPoints = 0)
+```
+
+
+The `imputeTS` ppackage has interpolation (linear, spline, 'stinterp') and Kalman smoothing algorithms to fill missing values. The Kalman filter can be a structural model fitted by maximum likelihood; this would seem to suit our data better than a linear fit.
+
+The overall difference is pretty minor; this shouldn't really influence the model too much. The Kalman filter tends to give larger imputed values than the interpolation; perhaps this is because it is taking seasonality into account. We'll use this imputed time series for modeling.
+
+```{r}
+# make ORP into base R time series
+
+library(imputeTS)
+orp.ts <- ts(ORP[, c(2)], start = c(2010,1,1), deltat = 1/365)
+orp.diff <- diff(orp.ts)
+# str(orp.ts)
+
+orp.ts2 <- ORP %>%
+  mutate(count = na_interpolation(count, option = "stine"))
+orp.ts3 <- ORP %>%
+  mutate(count = na_kalman(count))
+tt <- theme(axis.title.x = element_blank(),
+            axis.text.x = element_blank())
+a <- autoplot(orp.ts) + ggtitle("Raw, interpolated, Kalman smoothing") +tt
+b <- autoplot(orp.ts2) + tt
+c <- autoplot(orp.ts3)
+a/b/c
+
+orp.ts <- ts(orp.ts3[, c(2)], start = c(2010,1,1), deltat = 1/365)
+orp.diff <- diff(orp.ts)
+```
 
 
 
 ## Some basic time-series models
 
+We now have a pretty good idea of the bike traffic patterns at ORP and the contributions of seasonal components and randomness, while the overall trend isn't very strong in comparison.
+
+##### **Linear trend model**
+
+Model: expected value is the mean value for entire time series.
+
+- RMSE = 1226
+
 ```{r}
-# make ORP into base R time series
-orp.ts <- ts(ORP[,c(2)], start = c(2010,1,1), deltat = 1/365)
-orp.diff <- diff(orp.ts)
+# orp.ts <- window(orp.ts, start = 2011, end =c(2019,8))
+fit.mean <- meanf(orp.ts, h=500)
+autoplot(orp.ts) +
+  autolayer(fit.mean, series = 'mean')
+summary(fit.mean)
+checkresiduals(fit.mean)
 ```
 
 
-##### seasonal naive model benchmark
+##### **naive model**
+
+Naive model:  Expected value is same as previous value.
+Obviously, doesn't forecast very well because of strong seasonality of data.
+  
+- RMSE = 689
 
 ```{r}
-fit <- snaive(orp.ts)
-summary(fit)
-checkresiduals(fit)
+fit.naive <- naive(orp.ts, h=500)
+autoplot(orp.ts) +
+  autolayer(fit.naive, series = 'naive')
+summary(fit.naive)
+checkresiduals(fit.naive)
+
 ```
 
- - Forecast method: Seasonal naive method
-    
-    Model Information:
-    Call: snaive(y = orp.ts) 
-    
-    Residual sd: 899.0799 
 
 
-##### with differenced data
+##### **seasonal naive model benchmark**
+
+Seasonal naive: Captures seasonality and error gets progressively larger as forecast moves further from data. Model each forecast to be equal to the last observed value from the same season of the year. Would need to check to make sure the days of week line up with calendar? Week is strongly seasonal.
+RMSE = 882 (Residual sd)
 
 ```{r}
-fit.d <- snaive(orp.diff)
+fit.sn <- snaive(orp.ts, h= 500)
+autoplot(orp.ts) +
+  autolayer(fit.sn, series = 'sn') + 
+  xlim(c(2016, 2022))
+summary(fit.sn)
+checkresiduals(fit.sn)
+```
+
+
+##### seasonal naive with differenced data
+
+Forecast method: Seasonal naive method, differenced data
+Residual sd: 978
+
+
+```{r}
+fit.d <- snaive(orp.diff, h=500)
+autoplot(orp.diff) +
+  autolayer(fit.d, series = 'sn- diffed') + 
+  xlim(c(2016, 2022))
 summary(fit.d)
 checkresiduals(fit.d)
 ```
 
-Forecast method: Seasonal naive method
-    
-    Model Information:
-    Call: snaive(y = orp.diff) 
-    
-    Residual sd: 978.7187 
+
+##### Random walk with drift model.
+
+The same as the naive method except with drift according to the mean rate of change over time. The amount of drift is tiny so it appears the same as the naive model with similar fit.
+RMSE = 689
+
+```{r}
+fit.drift <- rwf(orp.ts, drift = TRUE, h=500)
+autoplot(orp.ts) +
+  autolayer(fit.drift, series = 'drift')
+summary(fit.drift)
+checkresiduals(fit.drift)
+```
+
+
+#### All the simple models
+
+```{r}
+autoplot(orp.ts) +
+    # autolayer(fit.drift, series = 'drift') +
+    autolayer(fit.naive, series = 'naive') +
+    autolayer(fit.mean, series = 'mean') +
+    autolayer(fit.sn, series = 'sn')  +
+  xlim(c(2016, 2021))
+  
+
+    # autolayer(fit.d, series = 'sn- diffed') + 
+
+
+```
+
+### Do we need to adjust the data?
+
+We could compute the average daily counts for weekdays and weekends seperately to create a system that takes day of week into account?
+
+We could use monthly or weekly totals as well for a more general approach to volume.
+
+
 
 
 ##### ETS model
 
+RMSE = 610
+
+Wow! Finally a better error than the naive model (689) ! 
+ 
 ```{r}
 fit.ets <- ets(orp.ts)
-# summary(fit.ets)
+autoplot(fit.ets)
+summary(fit.ets)
 checkresiduals(fit.ets)
 ```
-ran with warning warning about lack of seasonality in model.. freq>24/year (max is bimonthly seasonality data!):
-        
-    Missing values encountered. Using longest contiguous portion of time seriesI can't handle data with frequency greater than 24. Seasonality will be ignored. Try stlf() if you need seasonal forecasts.ETS(A,N,N) 
-
-    Call:
-     ets(y = orp.ts) 
-    
-      Smoothing parameters:
-        alpha = 0.2254 
-    
-      Initial states:
-        l = 0.3923 
-    
-      sigma:  642.4627
-
-
-Missing values encountered. Using longest contiguous portion of time seriesI can't handle data with frequency greater than 24. Seasonality will be ignored. Try stlf() if you need seasonal forecasts.ETS(A,N,N) 
-
-
-  *  sigma:  642.4627 - same as residual s.d.
-
+   
 
 Still lots of autocorrelation to incorporate into the model? Weekly autocorrelation..?
 
-- all the above methods can't handle daily data, we need stl
+For diff'ed data; sigma is 689.
+ 
+```{r}
+fit.ets <- ets(orp.diff)
+autoplot(fit.ets)
+summary(fit.ets)
+checkresiduals(fit.ets)
+```
 
 ##### STL + ETS model
 
@@ -397,16 +562,39 @@ Forecasts of STL objects are obtained by applying a non-seasonal forecasting met
 - can be expressed in arima terms of ar and ma.
 
 
+STL + ETS(A,N,N) gives RMSE = 547; much better than just ets()...
 
 ```{r}
 fit.stl <- stlf(orp.ts)
 summary(fit.stl)
 checkresiduals(fit.stl)
+
+```
+
+#### Train and compare to test data
+
+```{r}
+train <- ORP[, c(1,2)] %>% 
+  filter(year(Date) < 2017) %>%
+  as_tsibble()
+test <- ORP[, c(1,2)] %>% 
+  filter(year(Date) >= 2017) %>%
+  as_tsibble()
+
+train1 <- ts(ORP[,c(2)], start = c(2010,01,01), end = c(2016,12,31), deltat = 1/365)
+test1 <- ts(ORP[,c(2)], start = c(2017,01,01), end = ,deltat = 1/365)
+# train1 <- window(train1, start = c(2010,01))
 ```
 
 
-  **sigma:  548.0649**
+```{r}
+orp_fit <- stlf(orp.ts, h=400)
 
+# %>%
+#   model("stlf" = snaive(y=count))
+# orp_fc <- orp_fit %>% forcast(h=500)
+# orp.stlf <- augment(orp_fit)
+```
 
 
 
@@ -472,6 +660,26 @@ Broadly speaking, we can do three things with an effective model of the time ser
   - possibly has the most or least value depending on the model accuracy.
 
 <br>
+
+
+
+
+
+
+
+
+
+### things that don't work
+
+-shannon entropy/ information content: needs none existent ForeCA package not on CRAN
+```{r}
+# shannon <- bikes %>%
+  # features(count, feat_spectral)
+
+# feat_spectral(orp)
+```
+
+
 
 
 
