@@ -5,9 +5,9 @@ account: jmoggridge
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 2444039
-bundleId: 3305233
+bundleId: 3322975
 url: https://jmoggridge.shinyapps.io/OttBikeCounters/
-when: 1592894268.89985
+when: 1593262583.06033
 asMultiple: FALSE
 asStatic: FALSE
 ignoredFiles: .RData|models.nb.html|models.Rmd|ottbike_counters.ts.csv|ottbike_counters.ts.RDS|README.md|code

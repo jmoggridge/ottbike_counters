@@ -1,7 +1,15 @@
-#################################################################
+### GLOBAL.R script for Ottawa Bike Counters shiny app // JA Moggridge
+
+####  bike count & geo data input ############################################
 bikes <- readRDS("./data/ottbike_counters.ts.RDS") %>%
   filter(Date >= "2010-01-28",
-         Date <= "2019-09-30")
+         Date <= "2019-09-30") %>%
+  mutate(weekend = ifelse(is.weekend(Date), "Weekend", "Weekday"),
+         weekend = fct_rev(weekend))
+
+
+
+
 
 geo <- read.csv("./data/locations.csv")
 
@@ -10,7 +18,7 @@ locations <- c("Adawé", "Alexandra", "Canal Ritz", "Colonel By",
                "OTrain/Bayview", "OTrain/Gladstone", "OTrain/Young",
                "Ottawa River", "Portage", "Somerset")
 
-######################################################################
+#### weather input ##################################
 
 weather <- readRDS("./data/bike.weather.long.RDS") %>%
   filter(Date > ymd("2011-12-15"))  # where is 2010 data? wtf?
@@ -24,7 +32,7 @@ bike.weather <- right_join(bikes, weather, by="Date") %>%
     # make Precip NA's into 0s and create levels for factor
     Precip = replace_na(Precip, replace = 0),
     Precipitation = case_when(
-      Precip >= 20 ~ "+++",
+      Precip >= 10 ~ "+++",
       Precip >= 5 ~ "++",
       Precip > 0 ~ "+",
       Precip == 0 ~ "-",
@@ -35,8 +43,9 @@ bike.weather <- right_join(bikes, weather, by="Date") %>%
   filter(!is.na(count)) %>%
   filter(!is.na(Precip))
 
-#############################  PCA  ####################################
-#
+####  PCA dataframe input ####################################
+
+### ran this code:
 # library(broom)
 # library(feasts)
 # bikes_features <- bikes %>%
@@ -54,11 +63,24 @@ bike.weather <- right_join(bikes, weather, by="Date") %>%
 
 pcs <- readRDS("./data/bikes_pca.RDS")
 
-###########################   Themes  #################################
+####  Themes  #################################
 
-col_discrete <- scale_colour_carto_d(name = "", type = 'qualitative', direction = 1)
-fill_discrete <- scale_fill_carto_d(name = "", type = 'qualitative', direction = 1)
-basic_theme <- theme_void() + theme_tufte(base_size = 16,
+### HTML THEMES
+
+# makes all the horizontal lines actually show up
+hr <-  tags$head(tags$style(HTML("hr {border-top: 1px solid #000000;}")))
+hr <-  tags$head(tags$style(HTML("
+hr {
+  margin-top: 10px;
+  margin-bottom: 10px;
+  border: 0;
+  border-top: 1px solid #000000;
+}"
+)))
+
+# col_discrete <- scale_colour_carto_d(name = "", type = 'qualitative', direction = 1)
+# fill_discrete <- scale_fill_carto_d(name = "", type = 'qualitative', direction = 1)
+basic_theme <- theme_void() + theme_tufte(base_size = 15,
                                           base_family = 'sans')
 
 facet_labels <- theme(strip.text = element_text(face = 'bold', angle=90, colour = 'black', size = 12), #face = "bold"
@@ -68,17 +90,16 @@ no_facet_labs <- theme(strip.background = element_blank(), strip.text.x = elemen
 legend_format <- theme(legend.text = element_text(size = 11)) #face = "bold",
 base_x <- geom_hline(yintercept = -1, color= 'black')
 base_y <- geom_vline(xintercept = 0, colour = 'black')
-log10x <- scale_x_continuous(trans='log10')
+# log10x <- scale_x_continuous(trans='log10')
 
-## Basic plot lines  for count threshold
-threshold <- geom_hline(yintercept = c(100,200), linetype = "longdash", color = "black", size = 0.3, alpha = 0.7)
-thresholdv <- geom_vline(xintercept=c(100, 200), linetype="longdash", color = "black", size = 0.3, alpha = 0.7)
 
-# for timeseries first of months' lines
-first_of_month <- geom_vline(xintercept = c(182, 213, 242), color = "darkgrey", alpha = 0.3, size = 2.5)
-annot <- data.frame(x=c(170,200,230), y=seq(1015,1015,3), label = c('June', 'July', 'Aug'))
 
-## Social media, by-line,
+##### Links, Icons & stuff ###
+
+whitespace <- HTML('&nbsp;&nbsp;&nbsp;&nbsp;')
+bike.icon <- HTML('<i class="fa fa-bicycle fa-1x" aria-hidden="false"></i>')
+
+
 jm.link <- tags$a(href="https://jmoggridge.github.io/", "J.Moggridge")
 twitter.link <- tags$a(href="https://twitter.com/quaxlikeaduck", icon("twitter"))
 github.link <- tags$a(href="https://github.com/jmoggridge/ottbike_counters", icon("github"))
@@ -94,11 +115,9 @@ side.text <- h5("Dashboard by", jm.link, twitter.link, github.link,"|",
                 em("Contains information licensed under the ",city.lic.link),
 
                     )
-####################3
 
 
-
-#### Tab captions
+#### Tab captions ######
 
 cap.ts <- p("Daily observations for total riders.
             Notes on quality of this dataset:")
@@ -153,13 +172,6 @@ cap.ACF <- p(
 
 )
 
-# cap.clust <-
-#   p(tags$b("Hierarchical clustering of bike counter locations by similarity in daily counts since 2016."),
-#     "Average-linkage clusters from normalized observations by unweighted paired group method with arithmetic mean (UPGMA).
-#     Interestingly, locations do not all cluster according to proximity, but perhaps also by seasonal usage patterns (annual/hebdo).",
-#     h5("This plot is not reactive to selected inputs as several counters do not have concurrent or sufficient data."))
-# cap.arima <- p("An ARIMA forecast model for each bike counter that was operational in 2019")
-
 cap.STL <-
   p(tags$b("Seasonal and trend decomposition using Loess method (STL)."),
     "STL splits each time series into seasonal, trend and irregular components.
@@ -169,11 +181,16 @@ Computed with the 'feasts' package STL algorithm with robust default parameters.
 
 cap.weather <-
   p(tags$b("Relationships between daily bike counts and climate stressors"),
-    " (temperature, precipitation, wind angle and max. gust speed) at selected locations. The lower limit of wind speed measurement is ~30 km/h,
+    " (temperature, precipitation, wind angle and max. gust speed) at selected locations.
+    The lower limit of wind speed measurement is ~30 km/h,
 observations plotted at 29 km/h represent calm days with low wind.
-    Climate observations from Ottawa Airport", br(),
-    "* 'All' tab figure displays data from either the chosen single location, group of locations, or all locations; data can be filtered with 'date range' selector.
-    Other weather tabs will show a panel for each location in the 'Group selection'.")# a(href))
+Precipitation boxplots' area are proportional to the number of days of data available; notches suggest
+median counts are significantly different. Temperatures are daily means. Wind direction and speed are
+taken from the maximum gust observed during the day. Climate observations from Ottawa Airport.", br(),
+    "* Plots are reactive to selected inputs: input for the 'All' variables tab is selected using the
+    dropdown menu (single/group/all locations) and reacts to the selections on the sidebar.
+    Other tabs will show a panel for each location in the 'Group selection'.
+    Data can be filtered with 'date range' slider. ")
 
 
 cap.pca <-
@@ -184,3 +201,98 @@ two principle axes (PC1 and PC2). Here, PCA allows use to visually evaluate the 
 We note that there appear to be three main clusters which generally correspond with geography but not entirely: the Laurier counters, the Canal/Ottawa river group and the O-train group.
 Portage has been omitted from this analysis due to low quality data and general disparity with the other locations"
 )
+
+cap.dist <-
+  p(tags$b("Distribution of daily bike count by location and weekday/end."),
+    "Notches in the boxplot that don't overlap suggest significantly different median counts. Boxplot points
+    indicate min/max counts and outliers. Boxplot area has been scaled to the number of days measured at each location.")
+
+
+
+
+#### recycling bin #####
+
+
+
+
+# date.range <-   dateRangeInput("date.range", p(tags$b("Date range:"), "min 2010-01-28 | max 2019-09-30"),
+#                                start  = "2010-01-28",   end = "2019-09-30",
+#                                min    = "2010-01-28",   max = "2019-09-30",
+#                                format = "yyyy/mm/dd",   separator = " - ",
+#                                startview = "decade")
+
+
+
+# ### heatmap ##
+# output$heatmap <- renderPlot({
+#     bike.matrix <- bikes %>% as_tibble() %>%
+#         mutate(location = as.factor(location)) %>%
+#         tidyr::pivot_wider(id_cols = "Date",
+#                            names_from = "location",
+#                            values_from = 'count') %>%
+#         # added this to remove early years with no data
+#         filter(Date > ymd("2016-01-01")) %>%
+#         mutate_if(is.character, as.numeric) %>%
+#         # make sure date(col #1) isn't in matrix !!! OR ELSE!!
+#         #  (must remove) 6,7 is laurier/bay+lyon; 11,13,14 are young/gladst/portage
+#         select(c(2:5, 8:10, 12, 14)) %>%
+#         as.matrix()
+#
+#     colr <- viridis_pal(alpha = 0.9, begin = 0, end = 1, direction = 1,
+#                         option = input$drop.colours)(1000)
+#     b.matrix <- rcorr(bike.matrix)
+#     heatmap.2(b.matrix$r, scale="none", # 'none' because matrix is symmetric
+#               trace='none', col = colr,
+#               distfun = function(x) dist(x, method = "euclidean"),
+#               hclustfun = function(x) hclust(x, method = "average"),   ### hclust methods: average:UPGMA; single:NN; centroid, median,
+#               dendrogram = c("row"),
+#               symm = TRUE,
+#               key = FALSE,
+#               # key.title = "Distance",
+#               density.info = "none",
+#               margins = c(10, 12)) + basic_theme # use margins to avoid cutting off labels
+# })
+
+
+# output$table.acf <- DT::renderDataTable(DT::datatable({
+#     bikes %>%
+#         features(count, feat_acf) %>%
+#         mutate_if(is.numeric, round, 3)},
+#     rownames = FALSE,
+#     options = list(paging = FALSE, autoWidth = TRUE, searching=FALSE))
+# )
+
+# per2<- period.df %>%
+#     gg_season(alpha = 0.1, size = 1, period = "week") +
+#     basic_theme + geom_rangeframe(colour='black') +
+#     scale_color_viridis_c() +
+#     theme(legend.position = 'none',
+#           axis.text.y  = element_blank(),
+#           axis.title.y = element_blank(), axis.title.x = element_blank(),
+#           axis.text.x = element_text(angle = 35, size=11, hjust = 1, vjust = 1),
+#           panel.grid.major.y = element_line(colour = "grey", size = 0.2),
+#           plot.margin = margin(0.5, 0, 0.1, 0, "cm")
+#     )
+# tab.clust <- tabPanel(tags$b("Clustering"),
+#                       plotOutput("heatmap", height = '500px', width = '100%'),
+#                       cap.clust, hr()
+# )
+
+
+# cap.clust <-
+#   p(tags$b("Hierarchical clustering of bike counter locations by similarity in daily counts since 2016."),
+#     "Average-linkage clusters from normalized observations by unweighted paired group method with arithmetic mean (UPGMA).
+#     Interestingly, locations do not all cluster according to proximity, but perhaps also by seasonal usage patterns (annual/hebdo).",
+#     h5("This plot is not reactive to selected inputs as several counters do not have concurrent or sufficient data."))
+# cap.arima <- p("An ARIMA forecast model for each bike counter that was operational in 2019")
+
+
+
+## Basic plot lines  for count threshold
+# threshold <- geom_hline(yintercept = c(100,200), linetype = "longdash", color = "black", size = 0.3, alpha = 0.7)
+# thresholdv <- geom_vline(xintercept=c(100, 200), linetype="longdash", color = "black", size = 0.3, alpha = 0.7)
+
+# for timeseries first of months' lines
+# first_of_month <- geom_vline(xintercept = c(182, 213, 242), color = "darkgrey", alpha = 0.3, size = 2.5)
+# annot <- data.frame(x=c(170,200,230), y=seq(1015,1015,3), label = c('June', 'July', 'Aug'))
+
